@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=77"]
+requires = ["setuptools>=84,<85"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -19,6 +19,17 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 
+# vLLM's plugin and parser APIs change between minor versions, so each release
+# supports exactly one vLLM minor version.
+dependencies = [
+    "vllm>=0.29.0,<0.30.0",
+    "torch>=2.9.0",
+    "transformers>=5.5.3",
+]
+
+[project.entry-points."vllm.general_plugins"]
+aleph_alpha_inference = "aleph_alpha_inference:register"
+
 [project.urls]
 Repository = "https://github.com/Aleph-Alpha/aleph-alpha-inference"
 Changelog = "https://github.com/Aleph-Alpha/aleph-alpha-inference/blob/main/CHANGELOG.md"
@@ -31,3 +42,6 @@ packages = ["aleph_alpha_inference"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "gpu: needs CUDA and a vLLM-capable GPU",
+]
