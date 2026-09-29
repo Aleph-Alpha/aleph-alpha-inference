@@ -1,0 +1,36 @@
+name: Test
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# GPU tests (`-m gpu`) run on maintainers' machines before a release. This repo
+# is public, so it gets no self-hosted runners: a pull request from a fork
+# could run arbitrary code on them.
+jobs:
+  unit-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Install uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+      - name: Run no-GPU tests
+        run: uv run pytest -m "not gpu" -v
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Install uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+      - name: Build distributions
+        run: uv build
+      - name: Check the wheel installs and imports
+        run: |
+          uv venv /tmp/wheel-check
+          uv pip install --python /tmp/wheel-check --no-deps dist/*.whl
+          /tmp/wheel-check/bin/python -c "import aleph_alpha_inference"
