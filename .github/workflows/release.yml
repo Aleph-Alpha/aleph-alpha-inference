@@ -84,6 +84,77 @@ jobs:
           uv publish --trusted-publishing always \
             --check-url https://pypi.org/simple/
 
+  # The image bundles the same wheel as the PyPI upload on top of the official
+  # vLLM image. It does not wait for the `pypi` approval, so a TestPyPI-only
+  # release still gets an image; GHCR packages start out private.
+  publish-image:
+    needs: [release-please, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    env:
+      IMAGE: ghcr.io/aleph-alpha/aleph-alpha-inference
+      TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: dist
+          path: dist/
+      - name: Resolve versions
+        id: versions
+        run: |
+          # The vLLM the package pins (e.g. "vllm>=0.29.0,<0.30.0" -> 0.29.0),
+          # else the Dockerfile's default.
+          vllm=$(sed -n 's/.*"vllm>=\([0-9][0-9.]*\).*/\1/p' pyproject.toml)
+          if [ -z "$vllm" ]; then
+            vllm=$(sed -n 's/^ARG VLLM_VERSION=//p' Dockerfile)
+          fi
+          echo "vllm=$vllm" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG_NAME#v}-vllm$vllm" >> "$GITHUB_OUTPUT"
+      # The vLLM base image needs more disk than a standard runner has free.
+      # No self-hosted runners: this repo is going to be public.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          sudo docker image prune --all --force
+          df -h /
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Build and push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          push: true
+          build-args: VLLM_VERSION=${{ steps.versions.outputs.vllm }}
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.versions.outputs.tag }}
+            ${{ env.IMAGE }}:latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.versions.outputs.tag }}
+            org.opencontainers.image.licenses=Apache-2.0
+          sbom: true
+          provenance: mode=max
+      - name: Add the image to the GitHub release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_TAG: ${{ steps.versions.outputs.tag }}
+        run: |
+          gh release view "$TAG_NAME" --repo "${{ github.repository }}" \
+            --json body --jq .body > notes.md
+          printf '\n## Container image\n\n```sh\ndocker pull %s:%s\n```\n' \
+            "$IMAGE" "$IMAGE_TAG" >> notes.md
+          gh release edit "$TAG_NAME" --repo "${{ github.repository }}" --notes-file notes.md
+
   attach-to-release:
     needs: [release-please, publish-pypi]
     runs-on: ubuntu-latest
