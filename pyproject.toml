@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aleph-alpha-inference"
+version = "0.0.0"
+description = "vLLM plugin for Aleph Alpha models"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Aleph Alpha" }]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: POSIX :: Linux",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.urls]
+Repository = "https://github.com/Aleph-Alpha/aleph-alpha-inference"
+Changelog = "https://github.com/Aleph-Alpha/aleph-alpha-inference/blob/main/CHANGELOG.md"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.setuptools]
+packages = ["aleph_alpha_inference"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
