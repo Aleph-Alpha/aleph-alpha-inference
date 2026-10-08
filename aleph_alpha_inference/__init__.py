@@ -54,6 +54,19 @@ def register() -> None:
         )
         logger.info("Registered kolibri1 reasoning and tool call parsers with vLLM")
 
+        # Hadamard int4 KV backend for Kolibri 1's full-attention layers, opt-in with
+        # --additional-config '{"kolibri1": {"kv_cache": "hadamard-int4"}}'. The layers
+        # hand the class to Attention directly; the CUSTOM slot is how vLLM names it.
+        from vllm.v1.attention.backends.registry import (
+            AttentionBackendEnum,
+            register_backend,
+        )
+
+        register_backend(
+            AttentionBackendEnum.CUSTOM,
+            "aleph_alpha_inference.hadamard_int4.backend.HadamardInt4Backend",
+        )
+
     except Exception as e:
         import logging
 

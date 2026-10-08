@@ -2,6 +2,8 @@
 # SPDX-FileCopyrightText: Copyright 2026 Aleph Alpha GmbH
 """Inference-only Kolibri 1 model."""
 
+import copy
+from collections.abc import Iterable
 from functools import partial
 
 import torch
@@ -34,6 +36,8 @@ from vllm.model_executor.models.utils import (
     extract_layer_index,
     maybe_prefix,
 )
+
+from aleph_alpha_inference import hadamard_int4
 
 
 class Kolibri1Attention(nn.Module):
@@ -94,23 +98,75 @@ class Kolibri1Attention(nn.Module):
                 rope_parameters=config.rope_parameters,
             )
 
+        # Hadamard int4 KV cache on the full-attention layers: the QK-norm gains folded
+        # into the rotation maps, q and k rotated in place (see
+        # aleph_alpha_inference/hadamard_int4).
+        kv_config = hadamard_int4.get_config(vllm_config)
+        self.hadamard_int4 = is_full_attention and kv_config is not None
+        cache_config = vllm_config.cache_config
+        attn_backend = None
+        if self.hadamard_int4:
+            from aleph_alpha_inference.hadamard_int4 import (
+                qk_rotate,  # noqa: F401 (registers the op)
+            )
+            from aleph_alpha_inference.hadamard_int4.backend import HadamardInt4Backend
+
+            cache_config = copy.copy(cache_config)
+            cache_config.cache_dtype = hadamard_int4.KV_DTYPE
+            attn_backend = HadamardInt4Backend
         self.attn = Attention(
             self.num_heads,
             self.head_dim,
             self.head_dim**-0.5,
             num_kv_heads=self.num_kv_heads,
-            cache_config=vllm_config.cache_config,
+            cache_config=cache_config,
             quant_config=quant_config,
             per_layer_sliding_window=sliding_window,
             prefix=f"{prefix}.attn",
+            attn_backend=attn_backend,
         )
         self.q_norm = RMSNorm(self.head_dim, eps=config.rms_norm_eps)
         self.k_norm = RMSNorm(self.head_dim, eps=config.rms_norm_eps)
+        if self.hadamard_int4:
+            self.rms_norm_eps = config.rms_norm_eps
+            self.hadamard_rotation = hadamard_int4.layer_rotation(
+                extract_layer_index(prefix), kv_config.seed
+            )
+            # Row maps applied after the scaleless RMS normalize; filled from the norm
+            # gains once the weights are in (fold_qk_norm_gains).
+            q_map, k_map = hadamard_int4.fold_norm_gains(
+                torch.ones(self.head_dim),
+                torch.ones(self.head_dim),
+                self.hadamard_rotation,
+            )
+            self.register_buffer("q_map", q_map, persistent=False)
+            self.register_buffer("k_map", k_map, persistent=False)
+
+    def fold_qk_norm_gains(self) -> None:
+        """Fold the loaded QK-norm gains into the rotation maps:
+        q_map = diag(g_q g_k) R^T."""
+        q_map, k_map = hadamard_int4.fold_norm_gains(
+            self.q_norm.weight, self.k_norm.weight, self.hadamard_rotation
+        )
+        self.q_map.copy_(q_map)
+        self.k_map.copy_(k_map)
 
     def forward(
         self, positions: torch.Tensor, hidden_states: torch.Tensor
     ) -> torch.Tensor:
         qkv, _ = self.qkv_proj(hidden_states)
+        if self.hadamard_int4:
+            q, k = torch.ops.aleph_alpha_inference.kolibri1_qk_rotate(
+                qkv,
+                self.q_map,
+                self.k_map,
+                self.num_heads,
+                self.num_kv_heads,
+                self.rms_norm_eps,
+            )
+            v = qkv[..., self.q_size + self.kv_size :]
+            output, _ = self.o_proj(self.attn(q, k, v))
+            return output
         q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
         q_by_head = q.view(*q.shape[:-1], q.shape[-1] // self.head_dim, self.head_dim)
         q = self.q_norm(q_by_head).view(q.shape)
@@ -327,3 +383,16 @@ class Kolibri1ForCausalLM(Qwen3MoeForCausalLM):
         self.num_local_physical_experts = example_layer.n_local_physical_experts
         self.num_routed_experts = example_layer.n_routed_experts
         self.num_redundant_experts = example_layer.n_redundant_experts
+
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
+        loaded = super().load_weights(weights)
+        # The QK-norm gains only enter the scores through the folded rotation maps,
+        # so refresh them once the checkpoint weights are in.
+        with torch.no_grad():
+            for layer in self.model.layers:
+                if (
+                    not isinstance(layer, PPMissingLayer)
+                    and layer.self_attn.hadamard_int4
+                ):
+                    layer.self_attn.fold_qk_norm_gains()
+        return loaded
