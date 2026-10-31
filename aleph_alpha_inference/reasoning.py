@@ -21,9 +21,12 @@ sees the prompt, files the answer as reasoning or the reasoning as answer.
 ``Kolibri1Parser`` derives the starting state the same way the template
 does.
 
-This covers the generation prompt only: a continued final assistant message
-(``continue_final_message``) always gets the closed block, whatever the
-switch says, and the parser does not account for that.
+A continued final assistant message (``continue_final_message``) always gets
+the closed ``<think>...</think>`` block in the rendered prompt regardless of
+the thinking switch. On the streaming path ``is_reasoning_end`` sees that
+closed block in ``prompt_token_ids``; on the non-streaming path
+``Kolibri1Parser`` checks ``request.continue_final_message`` and treats the
+continuation as answer content.
 """
 
 from collections.abc import Mapping
@@ -57,6 +60,26 @@ class Kolibri1Parser(Qwen3Parser):
         kwargs["chat_template_kwargs"] = chat_kwargs
         super().__init__(tokenizer, tools, **kwargs)
 
+    def extract_reasoning(
+        self,
+        model_output: str,
+        request,
+    ) -> tuple[str | None, str | None]:
+        if getattr(request, "continue_final_message", False) is True:
+            return None, model_output
+        return super().extract_reasoning(model_output, request)
+
 
 class Kolibri1ParserReasoningAdapter(ParserEngineReasoningAdapter):
     _parser_engine_cls = Kolibri1Parser
+
+    def extract_reasoning(
+        self,
+        model_output: str,
+        request,
+    ) -> tuple[str | None, str | None]:
+        if getattr(request, "continue_final_message", False) is True:
+            self._parser_engine._reset()
+            self._streaming_count_valid = True
+            return None, model_output
+        return super().extract_reasoning(model_output, request)
