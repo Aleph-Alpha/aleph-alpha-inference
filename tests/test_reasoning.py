@@ -48,7 +48,7 @@ def _token_ids(tokenizer, *tokens: str) -> list[int]:
     return [vocab.get(token, 100) for token in tokens]
 
 
-def _make_request() -> MagicMock:
+def _make_request(*, continue_final_message: bool = False) -> MagicMock:
     from vllm.entrypoints.openai.chat_completion.protocol import (
         ChatCompletionRequest,
     )
@@ -57,6 +57,7 @@ def _make_request() -> MagicMock:
     request.tools = []
     request.tool_choice = "auto"
     request.include_reasoning = True
+    request.continue_final_message = continue_final_message
     return request
 
 
@@ -269,13 +270,14 @@ TOOL_LOOP_MESSAGES = [
 ]
 
 
-def _render(kwargs, messages=USER_MESSAGES) -> str:
+def _render(kwargs, messages=USER_MESSAGES, *, continue_final_message: bool = False) -> str:
     from transformers.utils.chat_template_utils import render_jinja_template
 
     rendered, _ = render_jinja_template(
         conversations=[messages],
         chat_template=CHAT_TEMPLATE,
-        add_generation_prompt=True,
+        add_generation_prompt=not continue_final_message,
+        continue_final_message=continue_final_message,
         **kwargs,
     )
     return rendered[0]
@@ -338,4 +340,45 @@ def test_template_thinking_on_streams_reasoning_then_content(
         ("thinking", None),
         None,
         (None, "answer"),
+    ]
+
+
+CONTINUE_MESSAGES = [
+    *USER_MESSAGES,
+    {"role": "assistant", "content": "The answer is "},
+]
+
+
+@pytest.mark.parametrize("kwargs", ALL_KWARGS, ids=_kwargs_id)
+def test_continue_final_message_non_streaming_is_content(
+    kolibri1_adapter_cls, tokenizer, kwargs
+):
+    adapter = kolibri1_adapter_cls(tokenizer, chat_template_kwargs=kwargs)
+    request = _make_request(continue_final_message=True)
+    assert adapter.extract_reasoning("42.", request) == (None, "42.")
+    assert adapter.count_reasoning_tokens(_token_ids(tokenizer, "42.")) == 0
+
+
+@pytest.mark.parametrize("kwargs", ALL_KWARGS, ids=_kwargs_id)
+def test_template_continue_final_message_closes_block(
+    kolibri1_adapter_cls, tokenizer, kwargs
+):
+    prompt = _render(kwargs, CONTINUE_MESSAGES, continue_final_message=True)
+    assert prompt.endswith("<|im_start|>assistant\n" + PREFILLED_BLOCK + "The answer is ")
+    adapter = kolibri1_adapter_cls(tokenizer, chat_template_kwargs=kwargs)
+    prompt_ids = _token_ids(tokenizer, *_tokens(tokenizer, prompt))
+    assert adapter.is_reasoning_end(prompt_ids)
+
+
+@pytest.mark.parametrize("kwargs", ALL_KWARGS, ids=_kwargs_id)
+def test_template_continue_final_message_streams_as_content(
+    kolibri1_adapter_cls, tokenizer, kwargs
+):
+    parser = _make_parser(kolibri1_adapter_cls, tokenizer, **kwargs)
+    prompt = _tokens(
+        tokenizer, _render(kwargs, CONTINUE_MESSAGES, continue_final_message=True)
+    )
+    assert _stream(parser, tokenizer, prompt, ["42", "."]) == [
+        (None, "42"),
+        (None, "."),
     ]
