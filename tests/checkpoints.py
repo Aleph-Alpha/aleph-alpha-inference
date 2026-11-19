@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright 2026 Aleph Alpha GmbH
-"""Tiny random-weight Kolibri 1 checkpoints for the plugin tests."""
+"""Tiny random-weight HF checkpoints for the plugin tests."""
 
 import json
 import os
@@ -47,7 +47,8 @@ KOLIBRI1_CONFIG = {
 }
 
 
-def _attention_and_norms(tensors: dict, prefix: str, cfg: dict) -> None:
+def attention_and_norms(tensors: dict, prefix: str, cfg: dict) -> None:
+    """Add random attention and norm weights of the layer `prefix` to `tensors`."""
     H = cfg["hidden_size"]
     n_heads = cfg["num_attention_heads"]
     n_kv = cfg["num_key_value_heads"]
@@ -66,7 +67,8 @@ def _attention_and_norms(tensors: dict, prefix: str, cfg: dict) -> None:
     tensors[f"{prefix}.post_ffn_norm.weight"] = torch.ones(H)
 
 
-def _moe_block(tensors: dict, prefix: str, cfg: dict) -> None:
+def moe_block(tensors: dict, prefix: str, cfg: dict) -> None:
+    """Add random MoE weights of the layer `prefix` to `tensors`."""
     H = cfg["hidden_size"]
     n_experts = cfg["num_experts"]
     moe_inter = cfg["moe_intermediate_size"]
@@ -89,7 +91,8 @@ def _moe_block(tensors: dict, prefix: str, cfg: dict) -> None:
         tensors[f"{ep}.down_proj.weight"] = torch.randn(H, moe_inter)
 
 
-def _write(tensors: dict, cfg: dict, model_dir: str) -> str:
+def write_checkpoint(tensors: dict, cfg: dict, model_dir: str) -> str:
+    """Write `cfg` and `tensors` as an HF checkpoint to `model_dir`."""
     with open(os.path.join(model_dir, "config.json"), "w") as f:
         json.dump(cfg, f, indent=2)
     save_file(tensors, os.path.join(model_dir, "model.safetensors"))
@@ -97,6 +100,7 @@ def _write(tensors: dict, cfg: dict, model_dir: str) -> str:
 
 
 def write_kolibri1_checkpoint(model_dir: str, cfg: dict = KOLIBRI1_CONFIG) -> str:
+    """Write a Kolibri 1 checkpoint with random weights for the config `cfg`."""
     H = cfg["hidden_size"]
 
     tensors: dict[str, torch.Tensor] = {
@@ -106,8 +110,8 @@ def write_kolibri1_checkpoint(model_dir: str, cfg: dict = KOLIBRI1_CONFIG) -> st
     }
     for i in range(cfg["num_hidden_layers"]):
         p = f"model.layers.{i}"
-        _attention_and_norms(tensors, p, cfg)
-        _moe_block(tensors, p, cfg)
+        attention_and_norms(tensors, p, cfg)
+        moe_block(tensors, p, cfg)
         # torchtitan checkpoint name for the routing correction bias.
         tensors[f"{p}.moe.router.expert_bias"] = torch.randn(cfg["num_experts"])
-    return _write(tensors, cfg, model_dir)
+    return write_checkpoint(tensors, cfg, model_dir)

@@ -1,6 +1,7 @@
-{#- Chat template of Kolibri 1, copied verbatim from tokenizer_config.json of the
-    released checkpoint. The reasoning tests render it to check the parser agrees
-    with its thinking switch. Update this copy when the template changes. -#}
+{#- Chat template of the Kolibri 1 tokenizer, copied verbatim from its
+    tokenizer_config.json.
+    The reasoning tests render it to check the parser agrees with its thinking switch.
+    Update this copy when the template changes. -#}
 {%- set _sv_reasoning_effort = reasoning_effort | default(none) -%}
 {%- set _sv_thinking_disabled = false -%}
 {%- if _sv_reasoning_effort is not none -%}

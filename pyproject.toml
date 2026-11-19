@@ -7,7 +7,7 @@ name = "aleph-alpha-inference"
 version = "1.0.0"
 description = "vLLM plugin for Aleph Alpha models"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 authors = [{ name = "Aleph Alpha" }]
@@ -21,11 +21,27 @@ classifiers = [
 
 # vLLM's plugin and parser APIs change between minor versions, so each release
 # supports exactly one vLLM minor version.
+# The lower bounds are the versions of the vllm/vllm-openai image of that vLLM
+# version, which the serving image builds on.
 dependencies = [
-    "vllm>=0.29.0,<0.30.0",
-    "torch>=2.9.0",
-    "transformers>=5.5.3",
+    # 0.33.0 moved the KV cache interfaces the plugin uses and fixed SWA
+    # eviction (vllm-project/vllm#60767); the decode fast path checks for it.
+    "vllm>=0.33.0,<0.34.0",
+    "torch>=2.14.0",
+    "transformers>=5.16.1",
+    # Kolibri 1.1 sparse attention kernels. 4.0.0b34 is the first beta that
+    # accepts vLLM 0.33.0's apache-tvm-ffi 0.1.11.
+    "flash-attn-4==4.0.0b34",
+    "nvidia-cutlass-dsl[cu13]>=4.8.0",
+    "quack-kernels>=0.6.5",
+    "flashinfer-python>=0.7.2.post1",
 ]
+
+[project.optional-dependencies]
+# nvcc and headers for the native Kolibri 1.1 kernels, which are built on
+# first use, where no CUDA 13 toolkit is installed. The kernels link CUDA 13's
+# cuBLASLt.
+cuda = ["cuda-toolkit[cccl,crt,cublas,cudart,curand,nvcc,nvjitlink,nvvm]>=13.0"]
 
 [project.entry-points."vllm.general_plugins"]
 aleph_alpha_inference = "aleph_alpha_inference:register"
@@ -37,11 +53,17 @@ Changelog = "https://github.com/Aleph-Alpha/aleph-alpha-inference/blob/main/CHAN
 [dependency-groups]
 dev = ["pytest>=8"]
 
-[tool.setuptools]
-packages = ["aleph_alpha_inference"]
+[tool.setuptools.packages.find]
+include = ["aleph_alpha_inference*"]
+
+[tool.setuptools.package-data]
+"aleph_alpha_inference.kernels" = ["*.cu", "licenses/*.txt"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# The tests import their helpers by module name.
+pythonpath = ["tests", "tests/kernels"]
 markers = [
-    "gpu: needs CUDA and a vLLM-capable GPU",
+    "gpu: needs CUDA and a vLLM-capable GPU (SM100 or SM90 for the Kolibri 1.1 kernels)",
+    "image: needs the serving image's native build setup (nvcc)",
 ]
