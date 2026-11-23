@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.0.0](https://github.com/Aleph-Alpha/aleph-alpha-inference/compare/v1.0.0...v2.0.0) (2026-11-23)
+
+
+### ⚠ BREAKING CHANGES
+
+* Add Kolibri 1.1 support ([#11](https://github.com/Aleph-Alpha/aleph-alpha-inference/issues/11))
+
+### Features
+
+* Add Kolibri 1.1 support ([#11](https://github.com/Aleph-Alpha/aleph-alpha-inference/issues/11)) ([86625b4](https://github.com/Aleph-Alpha/aleph-alpha-inference/commit/86625b45b3a7ad3e54848c495fb875b4610d9b0d))
+
 ## [1.0.0](https://github.com/Aleph-Alpha/aleph-alpha-inference/compare/v0.0.1...v1.0.0) (2026-10-02)
 
 
