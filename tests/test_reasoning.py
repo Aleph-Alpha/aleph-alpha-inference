@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright 2026 Aleph Alpha GmbH
-"""Unit tests for the Kolibri 1 reasoning parser.
+"""Unit tests for the Kolibri reasoning parsers.
 
 These drive the registered ``ReasoningParser`` adapters through the same
 ``DelegatingParser`` streaming path vLLM's chat serving layer uses, with a
@@ -20,6 +20,12 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from transformers.utils.chat_template_utils import render_jinja_template
+from vllm.entrypoints.openai.chat_completion.protocol import ChatCompletionRequest
+from vllm.parser.abstract_parser import DelegatingParser
+from vllm.reasoning import ReasoningParserManager
+from aleph_alpha_inference.reasoning import thinking_enabled
+from aleph_alpha_inference.tool_parser import Kolibri1ToolParser
 
 
 def _make_mock_tokenizer() -> MagicMock:
@@ -49,10 +55,6 @@ def _token_ids(tokenizer, *tokens: str) -> list[int]:
 
 
 def _make_request() -> MagicMock:
-    from vllm.entrypoints.openai.chat_completion.protocol import (
-        ChatCompletionRequest,
-    )
-
     request = MagicMock(spec=ChatCompletionRequest)
     request.tools = []
     request.tool_choice = "auto"
@@ -61,9 +63,15 @@ def _make_request() -> MagicMock:
 
 
 @pytest.fixture
-def kolibri1_adapter_cls(register_plugin):
-    from vllm.reasoning import ReasoningParserManager
+def reasoning_adapter_cls(register_plugin):
+    """The adapter under test. Another parser's tests can override it and
+    reuse the tests that take it or `parser`."""
+    return ReasoningParserManager.get_reasoning_parser("kolibri1")
 
+
+@pytest.fixture
+def kolibri1_adapter_cls(register_plugin):
+    """The adapter that follows the Kolibri 1 template's thinking switch."""
     return ReasoningParserManager.get_reasoning_parser("kolibri1")
 
 
@@ -78,21 +86,17 @@ def _make_parser(reasoning_adapter_cls, tokenizer, **chat_template_kwargs):
     The serving layer hands the request's ``chat_template_kwargs`` to the
     reasoning parser; that is the only way it learns whether thinking is on.
     """
-    from vllm.parser.abstract_parser import DelegatingParser
-    from vllm.tool_parsers.hermes_tool_parser import Hermes2ProToolParser
 
-    class _Kolibri1DelegatingParser(DelegatingParser):
+    class _DelegatingParser(DelegatingParser):
         reasoning_parser_cls = reasoning_adapter_cls
-        tool_parser_cls = Hermes2ProToolParser
+        tool_parser_cls = Kolibri1ToolParser
 
-    return _Kolibri1DelegatingParser(
-        tokenizer, chat_template_kwargs=chat_template_kwargs
-    )
+    return _DelegatingParser(tokenizer, chat_template_kwargs=chat_template_kwargs)
 
 
 @pytest.fixture
-def parser(kolibri1_adapter_cls, tokenizer):
-    return _make_parser(kolibri1_adapter_cls, tokenizer)
+def parser(reasoning_adapter_cls, tokenizer):
+    return _make_parser(reasoning_adapter_cls, tokenizer)
 
 
 def _stream(parser, tokenizer, prompt: list[str], generation: list[str]):
@@ -116,8 +120,8 @@ def _stream(parser, tokenizer, prompt: list[str], generation: list[str]):
     return deltas
 
 
-def test_single_turn_prompt_is_not_reasoning_end(kolibri1_adapter_cls, tokenizer):
-    adapter = kolibri1_adapter_cls(tokenizer)
+def test_single_turn_prompt_is_not_reasoning_end(reasoning_adapter_cls, tokenizer):
+    adapter = reasoning_adapter_cls(tokenizer)
     prompt = ["<|im_start|>", "user", "<|im_end|>", "<|im_start|>", "assistant"]
     assert not adapter.is_reasoning_end(_token_ids(tokenizer, *prompt))
 
@@ -133,13 +137,15 @@ def test_single_turn_reasoning_streams_as_reasoning(parser, tokenizer):
     ]
 
 
-def test_prompt_after_tool_call_is_not_reasoning_end(kolibri1_adapter_cls, tokenizer):
+def test_prompt_after_tool_call_is_not_reasoning_end(reasoning_adapter_cls, tokenizer):
     """The chat template keeps the reasoning of assistant turns after the
     last user message, so after a tool call the earlier turn's ``</think>``
-    is still in the prompt. Reasoning must still count as not yet ended:
-    only the current turn decides.
+    is still in the prompt. vLLM scans the whole prompt for it instead of
+    only the current turn and wrongly concludes reasoning already ended.
+    Fixed upstream by stopping the scan at turn boundary tokens; drop the
+    xfail once that lands in the pinned vLLM.
     """
-    adapter = kolibri1_adapter_cls(tokenizer)
+    adapter = reasoning_adapter_cls(tokenizer)
     prompt = [
         "<|im_start|>", "user", "<|im_end|>",
         "<|im_start|>", "assistant", "<think>", "reasoning", "</think>",
@@ -151,8 +157,8 @@ def test_prompt_after_tool_call_is_not_reasoning_end(kolibri1_adapter_cls, token
 
 
 def test_reasoning_after_tool_call_streams_as_reasoning(parser, tokenizer):
-    """Same case as above, seen from the streaming side: the new turn's
-    thinking must stream as ``reasoning``, not ``content``."""
+    """Same bug as above, seen from the streaming side: the new turn's
+    thinking is streamed as ``content`` instead of ``reasoning``."""
     prompt = [
         "<|im_start|>", "user", "<|im_end|>",
         "<|im_start|>", "assistant", "<think>", "reasoning", "</think>",
@@ -200,15 +206,11 @@ def _kwargs_id(kwargs: dict) -> str:
 
 @pytest.mark.parametrize("kwargs", THINKING_OFF_KWARGS, ids=_kwargs_id)
 def test_thinking_off_kwargs(kwargs):
-    from aleph_alpha_inference.reasoning import thinking_enabled
-
     assert not thinking_enabled(kwargs)
 
 
 @pytest.mark.parametrize("kwargs", THINKING_ON_KWARGS, ids=_kwargs_id)
 def test_thinking_on_kwargs(kwargs):
-    from aleph_alpha_inference.reasoning import thinking_enabled
-
     assert thinking_enabled(kwargs)
 
 
@@ -270,8 +272,6 @@ TOOL_LOOP_MESSAGES = [
 
 
 def _render(kwargs, messages=USER_MESSAGES) -> str:
-    from transformers.utils.chat_template_utils import render_jinja_template
-
     rendered, _ = render_jinja_template(
         conversations=[messages],
         chat_template=CHAT_TEMPLATE,
@@ -289,8 +289,6 @@ def _tokens(tokenizer, text: str) -> list[str]:
 
 @pytest.mark.parametrize("kwargs", ALL_KWARGS, ids=_kwargs_id)
 def test_template_prefills_block_iff_thinking_off(kwargs):
-    from aleph_alpha_inference.reasoning import thinking_enabled
-
     prompt = _render(kwargs)
     assert prompt.endswith("<|im_start|>assistant\n" + PREFILLED_BLOCK) == (
         not thinking_enabled(kwargs)
@@ -301,8 +299,6 @@ def test_template_prefills_block_iff_thinking_off(kwargs):
 def test_template_gate_agrees_with_parser(kolibri1_adapter_cls, tokenizer, kwargs):
     """The structured-output gate: with thinking off, a grammar applies from
     the first token because the prefilled block already closed the reasoning."""
-    from aleph_alpha_inference.reasoning import thinking_enabled
-
     adapter = kolibri1_adapter_cls(tokenizer, chat_template_kwargs=kwargs)
     prompt_ids = _token_ids(tokenizer, *_tokens(tokenizer, _render(kwargs)))
     assert adapter.is_reasoning_end(prompt_ids) == (not thinking_enabled(kwargs))
