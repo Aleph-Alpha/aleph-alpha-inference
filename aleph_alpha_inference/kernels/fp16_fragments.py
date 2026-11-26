@@ -16,7 +16,7 @@ from cutlass._mlir import ir
 from cutlass._mlir.dialects import arith, llvm, nvvm
 from cutlass.cutlass_dsl import dsl_user_op, T
 
-from aleph_alpha_inference.kernels.arch import is_blackwell
+from aleph_alpha_inference.kernels.arch import is_blackwell, sm80_port_enabled
 
 # FP16 high bytes of the E2M1 magnitudes, indexed by the magnitude bits.
 _F16_HIGH_BYTES = (0x3E3C3800, 0x46444240)
@@ -97,6 +97,24 @@ def mma_16816(a0, a1, a2, a3, b0, b1, c, *, loc=None, ip=None):
 @dsl_user_op
 def scale_pair(bytes2: Uint32, *, loc=None, ip=None):
     """Two E4M3 scales (low two bytes) as an exact FP16 pair."""
+    if sm80_port_enabled():
+        # E4M3 finite normals map exactly to FP16 with an exponent bias
+        # adjustment. Convert subnormals arithmetically and retain the sign.
+        body = "{ .reg .b32 b,m,e,h,s,res; .reg .b16 f16; .reg .f32 f; .reg .pred sub,nan; mov.u32 res,0; "
+        for shift in (0, 8):
+            body += (
+                f"bfe.u32 b,$1,{shift},8; and.b32 m,b,7; bfe.u32 e,b,3,4; "
+                "add.u32 h,e,8; shl.b32 h,h,10; shl.b32 s,m,7; or.b32 h,h,s; "
+                "setp.eq.u32 sub,e,0; cvt.rn.f32.u32 f,m; "
+                "mul.f32 f,f,0f3B000000; cvt.rn.f16.f32 f16,f; "
+                "@sub cvt.u32.u16 h,f16; and.b32 s,b,127; "
+                "setp.eq.u32 nan,s,127; @nan mov.u32 h,0x7e00; "
+                "and.b32 s,b,128; shl.b32 s,s,8; or.b32 h,h,s; "
+            )
+            if shift:
+                body += "shl.b32 h,h,16; "
+            body += "or.b32 res,res,h; "
+        return Uint32(inline_asm(T.i32(), [bytes2], body + "mov.b32 $0,res; }", "=r,r", loc, ip))
     low = arith.trunci(T.i16(), bytes2.ir_value(loc=loc, ip=ip), loc=loc, ip=ip)
     pair = nvvm.convert_f8x2_to_f16x2(
         ir.VectorType.get([2], T.f16()),
