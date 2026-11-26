@@ -40,6 +40,11 @@ with its dependencies there.
 Kolibri 1.1 runs on NVIDIA GPUs with compute capability 10.x (e.g. B200) or
 9.0 (H100). Kolibri 1 runs wherever vLLM does.
 
+Compute capability 8.0 (A100/A800) can use the experimental path with
+`KOLIBRI_SM80_PORT=1` set before starting vLLM. This path uses FlashAttention 2
+for full attention and skips sparse prefill staging.
+
+
 Some of its kernels are CUDA C++ extensions that compile on first use, which
 takes a few minutes. They need a C++20 compiler and a CUDA 13 toolkit with
 `nvcc`; without one, the `cuda` extra installs it:

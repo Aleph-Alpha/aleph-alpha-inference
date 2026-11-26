@@ -8,6 +8,7 @@ import cutlass.cute as cute
 import torch
 from cutlass import Float32, Int64
 
+from aleph_alpha_inference.kernels.arch import sm80_port_enabled
 from aleph_alpha_inference.kernels.cute_jit import Executables
 from aleph_alpha_inference.kernels.fp16_fragments import fp4_pair
 
@@ -75,11 +76,36 @@ class PackQuery:
 _COMPILED = Executables("decode_pack")
 
 
+def pack_sm80(q, packed, scales):
+    """Software FP8 conversion with the same E2M1 nearest-even boundaries."""
+    values = q.reshape(-1, 48, 8, 16)[:, :12].float()
+    magnitudes = values.abs()
+    peak = torch.where(magnitudes.isnan(), 0, magnitudes).amax(dim=-1)
+    scale = (peak / 6).clamp_min(0.001953125).to(torch.float8_e4m3fn)
+    scaled = values / scale.float().unsqueeze(-1)
+    mag = scaled.abs()
+    code = torch.zeros_like(mag, dtype=torch.uint8)
+    # Ties round to the even E2M1 code.
+    for boundary, inclusive in (
+        (0.25, False), (0.75, True), (1.25, False), (1.75, True),
+        (2.5, False), (3.5, True), (5.0, False),
+    ):
+        code += (mag >= boundary) if inclusive else (mag > boundary)
+    code |= scaled.signbit().to(torch.uint8) << 3
+    packed.view(torch.uint8)[:, :12].copy_(
+        (code[..., ::2] | (code[..., 1::2] << 4)).flatten(-2)
+    )
+    scales.view(torch.uint8)[:, :12].copy_(scale.view(torch.uint8))
+
+
 class DecodeQueryPack:
     """Pack BF16 queries into NVFP4 routing queries with one FP8 scale per
     16-value block."""
 
     def __call__(self, q, packed, scales):
+        if sm80_port_enabled():
+            pack_sm80(q, packed, scales)
+            return
         tensors = [
             q.view(q.shape[0], 48, 128),
             packed.view(torch.uint8),
