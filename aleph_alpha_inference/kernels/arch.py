@@ -3,6 +3,7 @@
 """Which serving kernels the local GPU runs."""
 
 from functools import lru_cache
+import os
 
 import torch
 
@@ -23,3 +24,8 @@ def gencode():
         return "-gencode=arch=compute_100f,code=sm_100f"
     major, minor = torch.cuda.get_device_capability()
     return f"-gencode=arch=compute_{major}{minor},code=sm_{major}{minor}"
+
+
+def sm80_port_enabled():
+    """Opt into the experimental Ampere paths before CUDA worker initialization."""
+    return os.environ.get("KOLIBRI_SM80_PORT") == "1"
