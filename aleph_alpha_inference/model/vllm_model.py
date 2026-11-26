@@ -32,6 +32,7 @@ from vllm.models.deepseek_v41.decoder_replay_layers import DecoderReplayLayers
 from vllm.utils.torch_utils import _encode_layer_name
 
 from aleph_alpha_inference.kernels.sparse_layout import SparseCheckpointLayout
+from aleph_alpha_inference.kernels.arch import sm80_port_enabled
 from aleph_alpha_inference.kernels.vllm_backend import serving_backend
 from aleph_alpha_inference.kolibri1 import Kolibri1ForCausalLM
 from aleph_alpha_inference.model.vllm_replay import bounded_replay_enabled, replay_layout
@@ -258,6 +259,8 @@ def _require_supported_gpu() -> None:
     """
     # Other GPUs would fail later with an opaque CUDA error.
     major, minor = torch.cuda.get_device_capability()
+    if (major, minor) == (8, 0) and sm80_port_enabled():
+        return
     if major != 10 and (major, minor) != (9, 0):
         raise ValueError(
             "Kolibri sparse serving requires an SM100 GPU (compute capability "

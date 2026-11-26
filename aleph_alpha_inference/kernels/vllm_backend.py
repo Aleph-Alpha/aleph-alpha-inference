@@ -20,6 +20,7 @@ from vllm.v1.kv_cache_interface import KVCacheLayout, KVQuantMode
 from vllm.v1.worker import ubatching, workspace
 from vllm.v1.worker.workspace import current_workspace_manager
 
+from aleph_alpha_inference.kernels.arch import sm80_port_enabled
 from aleph_alpha_inference.kernels.sparse_decode import split_capacity, workspace_shapes
 from aleph_alpha_inference.kernels.sparse_layout import SparseCheckpointLayout
 from aleph_alpha_inference.kernels.summary_cache import SummaryCache
@@ -273,7 +274,9 @@ class Block8Impl(AttentionImpl):
         # Tokens each row selects, and tokens of the pool it selects them from.
         self._topk = layout.index_topk
         self._pool_tokens = layout.index_pool_size
-        self._allow_prefill_staging = not config.parallel_config.use_ubatching
+        self._allow_prefill_staging = (
+            not sm80_port_enabled() and not config.parallel_config.use_ubatching
+        )
         context_limit = config.model_config.max_model_len
         self._decode_span_limit = context_limit
         self._prefill_query_limit = config.scheduler_config.max_num_batched_tokens

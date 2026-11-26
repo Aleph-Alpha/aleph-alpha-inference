@@ -7,6 +7,7 @@ from vllm.logger import init_logger
 from vllm.model_executor.models.config import VerifyAndUpdateConfig
 from vllm.v1.attention.backends.registry import AttentionBackendEnum
 
+from aleph_alpha_inference.kernels.arch import sm80_port_enabled
 from aleph_alpha_inference.kernels.serving_options import sparse_serving_options
 from aleph_alpha_inference.kernels.sparse_layout import SparseCheckpointLayout
 from aleph_alpha_inference.model.vllm_replay import bounded_replay_enabled, replay_layout
@@ -33,14 +34,15 @@ class Kolibri1SparseConfig(VerifyAndUpdateConfig):
             raise ValueError("Kolibri NVFP4 serving requires block_size=128")
         if attention.backend is None:
             attention.backend = AttentionBackendEnum.FLASH_ATTN
+        flash_attn_version = 2 if sm80_port_enabled() else 4
         if attention.flash_attn_version is None:
-            attention.flash_attn_version = 4
+            attention.flash_attn_version = flash_attn_version
         if (
             attention.backend != AttentionBackendEnum.FLASH_ATTN
-            or attention.flash_attn_version != 4
+            or attention.flash_attn_version != flash_attn_version
         ):
             raise ValueError(
-                "Kolibri sparse serving requires FLASH_ATTN with flash_attn_version=4"
+                f"Kolibri sparse serving requires FLASH_ATTN with flash_attn_version={flash_attn_version}"
             )
 
         # A prefix hit still recomputes the bounded-replay window (20,480 tokens
